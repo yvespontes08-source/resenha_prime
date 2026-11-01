@@ -1,16 +1,19 @@
 {
   "name": "resenha",
-  "version": "1.0.0",
-  "description": "Salas de voz com chat e transmissão de tela, estilo Discord (WebRTC + Socket.io)",
+  "version": "2.0.0",
+  "description": "Salas de voz, chat e transmissão de tela estilo Discord (LiveKit + Supabase)",
   "main": "server.js",
   "scripts": {
+    "build": "esbuild src/main.js --bundle --minify --sourcemap --format=esm --target=es2020 --outfile=public/dist/app.js",
+    "postinstall": "npm run build",
     "start": "node server.js"
   },
-  "engines": {
-    "node": ">=18"
-  },
+  "engines": { "node": ">=18" },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
+    "esbuild": "^0.28.2",
     "express": "^4.19.2",
-    "socket.io": "^4.7.5"
+    "livekit-client": "^2.23.0",
+    "livekit-server-sdk": "^2.19.2"
   }
 }
