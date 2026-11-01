@@ -15,6 +15,7 @@ export const call = {
   muted: false,
   deafened: false,
   focusKey: null,
+  avatarUrl: null,
   onChange: () => {}
 };
 
@@ -340,7 +341,7 @@ function personTile(item) {
   const tile = h('div', { class: 'tile' + (cam ? ' cam' : ''), 'data-identity': item.identity });
   if (item.speaking) tile.classList.add('speaking');
   if (cam) tile.append(videoFor(`${item.identity}:cam`, cam));
-  else tile.append(avatar(item.identity, item.name, 'lg'));
+  else tile.append(avatar(item.identity, item.name, 'lg', call.avatarUrl ? call.avatarUrl(item.identity) : null));
   tile.append(h('div', { class: 'label' },
     item.muted ? h('span', { html: ICON.smallMicOff, style: { display: 'inline-flex' } }) : null,
     h('span', null, item.name + (item.local ? ' (você)' : ''))));

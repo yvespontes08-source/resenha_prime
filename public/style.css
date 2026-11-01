@@ -241,3 +241,44 @@ button { cursor: pointer; }
 @media (max-width: 560px) {
   .side-toggle { display: inline-flex; } .sidebar { display: none; }   .app.show-side .sidebar { display: flex; position: fixed; left: 60px; top: 0; bottom: 0; z-index: 25; box-shadow: 8px 0 24px rgba(0,0,0,.4); }
 }
+
+/* ---------- Perfil: foto, banner e status ---------- */
+.avatar { position: relative; }
+.avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+.avatar.xl { width: 84px; height: 84px; font-size: 32px; }
+.status-dot { position: absolute; right: -2px; bottom: -2px; width: 38%; height: 38%; min-width: 10px; min-height: 10px; border-radius: 50%; border: 3px solid var(--dot-ring, var(--bg-1)); box-sizing: content-box; background: #80848e; }
+.status-dot.inline { position: static; display: inline-block; width: 10px; height: 10px; border: 0; flex-shrink: 0; }
+.st-online { background: var(--green); }
+.st-idle { background: var(--yellow); }
+.st-dnd { background: var(--red); }
+.st-offline { background: transparent; box-shadow: inset 0 0 0 3px #80848e; }
+.status-dot.inline.st-offline { box-shadow: inset 0 0 0 2.5px #80848e; }
+.avatar.sm .status-dot { border-width: 2px; }
+.user-panel { --dot-ring: var(--bg-3); }
+.menu { --dot-ring: #111214; }
+.mem:hover { --dot-ring: var(--bg-hover); }
+.mem.offline { opacity: .45; }
+.mem.offline:hover { opacity: 1; }
+
+.pcard { margin: -6px -6px 6px; border-radius: 6px 6px 0 0; overflow: hidden; background: #18191c; --dot-ring: #18191c; }
+.pcard-banner { height: 96px; position: relative; }
+.pcard-banner img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pcard-body { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 4px; }
+.pcard-body .avatar.xl { margin-top: -44px; border: 6px solid #18191c; box-sizing: content-box; }
+.pcard-name { font-size: 18px; font-weight: 700; margin-top: 4px; overflow-wrap: anywhere; }
+.pcard-status { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
+.pcard-role { font-size: 12px; color: var(--text-3); }
+.pcard-preview { margin: 0; border-radius: 8px; }
+.pcard-preview .pcard-banner { height: 120px; }
+.pbtn-row { display: flex; align-items: center; gap: 8px; }
+.pbtn-row .label { flex: 1; }
+.pbtn-row .btn { min-height: 34px; padding: 6px 12px; font-size: 14px; }
+
+.status-item { align-items: flex-start; }
+.status-item .status-dot { margin-top: 4px; }
+.status-text { display: flex; flex-direction: column; gap: 1px; }
+.status-text small { font-size: 12px; color: var(--text-3); }
+.status-item:hover .status-text small { color: #e3e5ff; }
+.status-item.selected { background: var(--bg-active); color: var(--text); }
+.menu { min-width: 260px; max-width: 300px; }
+.avatar.xl .status-dot, .avatar.lg .status-dot { width: 20px; height: 20px; min-width: 0; min-height: 0; border-width: 5px; right: 0; bottom: 0; }

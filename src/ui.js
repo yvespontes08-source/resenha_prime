@@ -60,8 +60,30 @@ export function colorFor(id) {
 export function initial(name) {
   return (String(name || '?').trim().charAt(0) || '?').toUpperCase();
 }
-export function avatar(id, name, cls) {
-  return h('span', { class: 'avatar' + (cls ? ' ' + cls : ''), style: { background: colorFor(id) }, 'aria-hidden': 'true' }, initial(name));
+export const STATUS = {
+  online: { label: 'Online', hint: '' },
+  idle: { label: 'Ausente', hint: '' },
+  dnd: { label: 'Não perturbe', hint: 'Você não ouve sons de notificação' },
+  invisible: { label: 'Invisível', hint: 'Você aparece offline, mas usa tudo normalmente' },
+  offline: { label: 'Offline', hint: '' }
+};
+
+// avatar(id, nome, classe, urlDaFoto, status)
+export function avatar(id, name, cls, url, status) {
+  const a = h('span', { class: 'avatar' + (cls ? ' ' + cls : ''), style: { background: url ? 'var(--bg-0)' : colorFor(id) }, 'aria-hidden': 'true' });
+  if (url) {
+    const img = h('img', { src: url, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer', draggable: 'false' });
+    img.addEventListener('error', () => { img.remove(); a.style.background = colorFor(id); a.prepend(initial(name)); });
+    a.append(img);
+  } else {
+    a.append(initial(name));
+  }
+  if (status) a.append(h('span', { class: 'status-dot st-' + status, title: (STATUS[status] || STATUS.offline).label }));
+  return a;
+}
+
+export function statusDot(status) {
+  return h('span', { class: 'status-dot inline st-' + status, 'aria-hidden': 'true' });
 }
 
 // ---------- Toast ----------
@@ -170,7 +192,10 @@ export function fmtTime(ts) {
 }
 
 let ctx;
+let beepsOff = false;
+export function setBeepsMuted(v) { beepsOff = v; }
 export function beep(from, to) {
+  if (beepsOff) return;
   try {
     ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
     const o = ctx.createOscillator();

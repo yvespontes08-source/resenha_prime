@@ -2,8 +2,9 @@
 import { createClient } from '@supabase/supabase-js';
 import {
   $, h, ICON, avatar, colorFor, toast, openMenu, closeMenu, openModal, closeModal, confirmModal,
-  field, linkify, fmtTime
+  field, linkify, fmtTime, STATUS, statusDot, setBeepsMuted
 } from './ui.js';
+import { prepareImage, storagePath } from './profile.js';
 import {
   call, joinCall, leaveCall, toggleMic, setDeafened, toggleCam, toggleScreen, participants, renderStage,
   getVolume, setVolume, loadSettings, saveSettings, switchDevice, applyAudioFilters, listDevices
@@ -26,6 +27,12 @@ let lastMsg = null;
 let previewTimer = null;
 let callPreview = [];       // quem está na call (antes de eu entrar)
 const names = new Map();    // id -> display_name
+const profs = new Map();    // id -> { display_name, avatar_url, banner_url }
+let myStatus = 'online';    // escolhido: online | idle | dnd | invisible
+let autoIdle = false;       // ausente automático por inatividade
+let presenceChannel = null;
+let presenceState = {};
+let lastActivity = Date.now();
 let installPrompt = null;
 let started = false;
 
@@ -190,15 +197,22 @@ async function startApp() {
   const uid = session.user.id;
   let prof = null;
   for (let i = 0; i < 5 && !prof; i++) {
-    const { data } = await sb.from('profiles').select('id, display_name').eq('id', uid).maybeSingle();
+    const { data } = await sb.from('profiles').select('id, display_name, avatar_url, banner_url').eq('id', uid).maybeSingle();
     prof = data;
     if (!prof) await new Promise((r) => setTimeout(r, 400));
   }
   me = prof || { id: uid, display_name: session.user.email.split('@')[0] };
-  names.set(me.id, me.display_name);
+  setProf(me);
+  try {
+    const { data: st } = await sb.from('user_status').select('status').eq('user_id', uid).maybeSingle();
+    if (st && STATUS[st.status]) myStatus = st.status;
+  } catch (_) {}
+  setBeepsMuted(myStatus === 'dnd');
   renderMe();
+  startPresence();
 
   call.onChange = onCallChange;
+  call.avatarUrl = (id) => (profs.get(id) || {}).avatar_url || null;
   wireStatic();
   subscribeMe();
   await loadRooms();
@@ -212,11 +226,85 @@ async function startApp() {
   onCallChange();
 }
 
+function setProf(p) {
+  if (!p || !p.id) return;
+  const old = profs.get(p.id) || {};
+  const merged = { ...old, ...p };
+  profs.set(p.id, merged);
+  if (merged.display_name) names.set(p.id, merged.display_name);
+}
+function avatarOf(id, name, cls, withStatus) {
+  const p = profs.get(id) || {};
+  return avatar(id, name || p.display_name || names.get(id), cls, p.avatar_url, withStatus ? statusOf(id) : null);
+}
+
 function renderMe() {
   $('me-name').textContent = me.display_name;
-  const a = $('me-avatar');
-  a.style.background = colorFor(me.id);
-  a.textContent = (me.display_name || '?').charAt(0).toUpperCase();
+  const a = avatarOf(me.id, me.display_name, '', true);
+  a.id = 'me-avatar';
+  $('me-avatar').replaceWith(a);
+  document.querySelector('.me-sub').textContent = STATUS[shownStatus()].label;
+}
+
+// ---------- Status e presença ----------
+// O status que eu mostro para os outros (ausente automático conta aqui)
+function shownStatus() {
+  if (myStatus === 'invisible') return 'invisible';
+  if (myStatus === 'online' && autoIdle) return 'idle';
+  return myStatus;
+}
+// Status de qualquer pessoa como eu enxergo
+function statusOf(id) {
+  if (me && id === me.id) {
+    const s = shownStatus();
+    return s === 'invisible' ? 'offline' : s;
+  }
+  const entry = presenceState[id] && presenceState[id][0];
+  return entry && STATUS[entry.status] ? entry.status : 'offline';
+}
+
+function startPresence() {
+  presenceChannel = sb.channel('presenca', { config: { presence: { key: me.id } } });
+  presenceChannel
+    .on('presence', { event: 'sync' }, () => {
+      presenceState = presenceChannel.presenceState();
+      renderMembers();
+      renderCallList();
+    })
+    .subscribe((st) => { if (st === 'SUBSCRIBED') publishPresence(); });
+
+  const activity = () => {
+    lastActivity = Date.now();
+    if (autoIdle) { autoIdle = false; publishPresence(); renderMe(); }
+  };
+  ['mousemove', 'keydown', 'mousedown', 'touchstart', 'focus'].forEach((ev) => window.addEventListener(ev, activity, { passive: true }));
+  setInterval(() => {
+    if (myStatus === 'online' && !autoIdle && Date.now() - lastActivity > 10 * 60 * 1000 && !(call.room && !call.muted)) {
+      autoIdle = true;
+      publishPresence();
+      renderMe();
+    }
+  }, 30000);
+}
+
+async function publishPresence() {
+  if (!presenceChannel) return;
+  try {
+    if (myStatus === 'invisible') await presenceChannel.untrack();
+    else await presenceChannel.track({ status: shownStatus(), at: Date.now() });
+  } catch (_) {}
+}
+
+async function setMyStatus(s) {
+  myStatus = s;
+  autoIdle = false;
+  setBeepsMuted(s === 'dnd');
+  renderMe();
+  renderMembers();
+  publishPresence();
+  const { error } = await sb.from('user_status').upsert({ user_id: me.id, status: s, updated_at: new Date().toISOString() });
+  if (error) toast('Não consegui salvar o status (rodou o SQL do perfil?).');
+  else toast(`Status: ${STATUS[s].label}`);
 }
 
 function renderEmpty() {
@@ -281,13 +369,13 @@ async function loadMembers() {
   if (!current) return;
   const id = current.id;
   const [m, rl] = await Promise.all([
-    sb.from('room_members').select('user_id, base_role, role_id, joined_at, profiles(display_name)').eq('room_id', id),
+    sb.from('room_members').select('user_id, base_role, role_id, joined_at, profiles(display_name, avatar_url, banner_url)').eq('room_id', id),
     sb.from('room_roles').select('*').eq('room_id', id).order('created_at')
   ]);
   if (!current || current.id !== id) return;
   members = (m.data || []).map((x) => ({ ...x, name: x.profiles ? x.profiles.display_name : 'Alguém' }));
   roles = rl.data || [];
-  for (const x of members) names.set(x.user_id, x.name);
+  for (const x of members) setProf({ id: x.user_id, ...(x.profiles || {}) });
   const mine = members.find((x) => x.user_id === me.id);
   if (mine && mine.name !== me.display_name) { me.display_name = mine.name; renderMe(); }
   renderMembers();
@@ -314,19 +402,24 @@ function nameColor(m) { const r = roleOf(m); return r ? r.color : null; }
 function renderMembers() {
   const panel = $('members-panel');
   panel.innerHTML = '';
+  if (!members.length) return;
   const groups = [];
-  const owner = members.filter((m) => m.base_role === 'owner');
-  const mods = members.filter((m) => m.base_role === 'moderator');
+  const online = members.filter((m) => statusOf(m.user_id) !== 'offline');
+  const offline = members.filter((m) => statusOf(m.user_id) === 'offline');
+  const owner = online.filter((m) => m.base_role === 'owner');
+  const mods = online.filter((m) => m.base_role === 'moderator');
   groups.push(['Dono', owner], ['Moderadores', mods]);
-  const rest = members.filter((m) => m.base_role === 'member');
+  const rest = online.filter((m) => m.base_role === 'member');
   for (const r of roles) groups.push([r.name, rest.filter((m) => m.role_id === r.id)]);
-  groups.push(['Membros', rest.filter((m) => !m.role_id || !roles.some((r) => r.id === m.role_id))]);
+  groups.push(['Online', rest.filter((m) => !m.role_id || !roles.some((r) => r.id === m.role_id))]);
+  groups.push(['Offline', offline]);
   for (const [title, list] of groups) {
     if (!list.length) continue;
     panel.append(h('div', { class: 'mem-group' }, `${title} — ${list.length}`));
     for (const m of list.sort((a, b) => a.name.localeCompare(b.name))) {
-      const b = h('button', { class: 'mem' },
-        avatar(m.user_id, m.name),
+      const st = statusOf(m.user_id);
+      const b = h('button', { class: 'mem' + (st === 'offline' ? ' offline' : '') },
+        avatarOf(m.user_id, m.name, '', true),
         h('span', { class: 'name', style: { color: nameColor(m) || '' } }, m.name),
         m.base_role === 'owner' ? h('span', { class: 'crown', html: ICON.crown, title: 'Dono' }) : null,
         m.base_role === 'moderator' ? h('span', { class: 'crown', html: ICON.shield, title: 'Moderador', style: { color: 'var(--accent)' } }) : null);
@@ -339,8 +432,7 @@ function renderMembers() {
 function memberMenu(anchor, userId) {
   const m = members.find((x) => x.user_id === userId);
   const name = m ? m.name : names.get(userId) || 'Alguém';
-  const items = [{ title: name }];
-  if (m) items.push({ node: h('div', { class: 'menu-range' }, `${ROLE_LABEL[m.base_role]}${roleOf(m) ? ' · ' + roleOf(m).name : ''}`) });
+  const items = [{ node: profileCard(userId, name, m) }];
 
   const inCall = call.room && call.room.remoteParticipants.get(userId);
   if (inCall) {
@@ -428,6 +520,14 @@ function subscribeRoom(id) {
 
 function subscribeMe() {
   meChannel = sb.channel('eu-' + me.id)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, (p) => {
+      if (!p.new || !p.new.id) return;
+      setProf(p.new);
+      if (p.new.id === me.id) { Object.assign(me, p.new); renderMe(); }
+      const mem = members.find((x) => x.user_id === p.new.id);
+      if (mem) { mem.name = p.new.display_name; renderMembers(); }
+      renderCallList();
+    })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'room_members', filter: `user_id=eq.${me.id}` }, () => loadRooms())
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'room_members' }, async (p) => {
       const o = p.old || {};
@@ -481,8 +581,8 @@ async function loadMessages(reset) {
 async function ensureNames(ids) {
   const missing = [...new Set(ids)].filter((id) => !names.has(id));
   if (!missing.length) return;
-  const { data } = await sb.from('profiles').select('id, display_name').in('id', missing);
-  for (const p of data || []) names.set(p.id, p.display_name);
+  const { data } = await sb.from('profiles').select('id, display_name, avatar_url, banner_url').in('id', missing);
+  for (const p of data || []) setProf(p);
 }
 
 function messageEl(m, prev) {
@@ -498,7 +598,7 @@ function messageEl(m, prev) {
   const text = h('div', { class: 'msg-text', title: cont ? fmtTime(m.created_at) : null });
   linkify(text, m.content);
   body.append(text);
-  const row = h('div', { class: 'msg-row' + (cont ? ' cont' : ''), 'data-mid': String(m.id) }, avatar(m.user_id, name), body);
+  const row = h('div', { class: 'msg-row' + (cont ? ' cont' : ''), 'data-mid': String(m.id) }, avatarOf(m.user_id, name), body);
   if (m.user_id === me.id || can('delete_messages')) {
     const del = h('button', { class: 'icon-btn msg-del', title: 'Apagar mensagem', 'aria-label': 'Apagar mensagem', html: ICON.trash });
     del.addEventListener('click', async () => {
@@ -579,7 +679,7 @@ function renderCallList() {
   if (inThis) {
     for (const x of participants()) {
       const li = h('li', { 'data-identity': x.identity, class: x.speaking ? 'speaking' : '' },
-        avatar(x.identity, x.name, 'sm ring'),
+        avatarOf(x.identity, x.name, 'sm ring'),
         h('span', { class: 'name', style: { color: nameColor(members.find((m) => m.user_id === x.identity)) || '' } }, x.name),
         h('span', { class: 'badges' },
           x.screen && !x.screen.isMuted ? h('span', { class: 'live-badge' }, 'AO VIVO') : null,
@@ -594,7 +694,7 @@ function renderCallList() {
     }
   } else {
     for (const p of callPreview) {
-      ul.append(h('li', null, avatar(p.identity, p.name, 'sm'), h('span', { class: 'name' }, p.name)));
+      ul.append(h('li', null, avatarOf(p.identity, p.name, 'sm'), h('span', { class: 'name' }, p.name)));
     }
   }
 }
@@ -894,27 +994,129 @@ async function bansModal() {
         try { await rpc('unban_member', { p_room: current.id, p_user: b.user_id }); bansModal(); toast('Desbanido.'); }
         catch (err) { toast(err.message); }
       });
-      list.append(h('div', { class: 'list-item' }, avatar(b.user_id, b.display_name),
+      list.append(h('div', { class: 'list-item' }, avatarOf(b.user_id, b.display_name),
         h('div', { class: 'grow' }, h('div', { class: 'title' }, b.display_name), h('div', { class: 'sub' }, b.reason || 'Sem motivo')), un));
     }
   } catch (err) { list.innerHTML = ''; list.append(h('p', { class: 'msg' }, err.message)); }
 }
 
+// Cartão de perfil (aparece no menu ao clicar em alguém)
+function profileCard(userId, name, m) {
+  const p = profs.get(userId) || {};
+  const st = statusOf(userId);
+  const banner = h('div', { class: 'pcard-banner', style: { background: p.banner_url ? 'var(--bg-0)' : colorFor(userId) } },
+    p.banner_url ? h('img', { src: p.banner_url, alt: '', referrerpolicy: 'no-referrer' }) : null);
+  const role = m ? `${ROLE_LABEL[m.base_role]}${roleOf(m) ? ' · ' + roleOf(m).name : ''}` : null;
+  return h('div', { class: 'pcard' },
+    banner,
+    h('div', { class: 'pcard-body' },
+      avatar(userId, name, 'xl', p.avatar_url, st),
+      h('div', { class: 'pcard-name', style: { color: m ? nameColor(m) || '' : '' } }, name),
+      h('div', { class: 'pcard-status' }, statusDot(st), STATUS[st].label),
+      role ? h('div', { class: 'pcard-role' }, role) : null));
+}
+
 function profileModal() {
+  const draft = { avatar_url: me.avatar_url || null, banner_url: me.banner_url || null };
+  const pending = { avatar: null, banner: null };    // arquivos novos escolhidos
+  const remove = { avatar: false, banner: false };
+  const urls = [];
   const name = h('input', { maxlength: '32', value: me.display_name });
+  const preview = h('div', { class: 'pcard pcard-preview' });
+  const msg = h('p', { class: 'msg' });
+
+  const render = () => {
+    preview.innerHTML = '';
+    const av = pending.avatar ? pending.avatar.url : remove.avatar ? null : draft.avatar_url;
+    const bn = pending.banner ? pending.banner.url : remove.banner ? null : draft.banner_url;
+    preview.append(
+      h('div', { class: 'pcard-banner', style: { background: bn ? 'var(--bg-0)' : colorFor(me.id) } }, bn ? h('img', { src: bn, alt: '' }) : null),
+      h('div', { class: 'pcard-body' },
+        avatar(me.id, name.value || me.display_name, 'xl', av, statusOf(me.id)),
+        h('div', { class: 'pcard-name' }, name.value || me.display_name),
+        h('div', { class: 'pcard-status' }, statusDot(statusOf(me.id)), STATUS[statusOf(me.id)].label)));
+  };
+  name.addEventListener('input', render);
+
+  const picker = (kind) => {
+    const input = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', hidden: true });
+    input.addEventListener('change', async () => {
+      const file = input.files && input.files[0];
+      input.value = '';
+      if (!file) return;
+      msg.textContent = '';
+      try {
+        const out = await prepareImage(file, kind);
+        const url = URL.createObjectURL(out.blob);
+        urls.push(url);
+        pending[kind] = { ...out, url };
+        remove[kind] = false;
+        render();
+      } catch (err) { msg.textContent = err.message; }
+    });
+    return input;
+  };
+  const avIn = picker('avatar');
+  const bnIn = picker('banner');
+  const btnRow = (label, input, kind) => h('div', { class: 'pbtn-row' },
+    h('span', { class: 'label' }, label),
+    h('button', { type: 'button', class: 'btn secondary', onClick: () => input.click() }, 'Trocar'),
+    h('button', { type: 'button', class: 'btn secondary', onClick: () => { pending[kind] = null; remove[kind] = true; render(); } }, 'Remover'),
+    input);
+
   const save = h('button', { class: 'btn primary' }, 'Salvar');
-  openModal({ title: 'Seu perfil', body: [field('Nome de exibição', name), h('p', { class: 'hint' }, 'O nome novo aparece na próxima vez que você entrar na call.')], actions: [h('button', { class: 'btn secondary', onClick: closeModal }, 'Cancelar'), save] });
+  openModal({
+    title: 'Seu perfil',
+    body: [
+      preview,
+      btnRow('Foto de perfil', avIn, 'avatar'),
+      btnRow('Banner', bnIn, 'banner'),
+      h('p', { class: 'hint' }, 'PNG, JPG, WebP ou GIF. Foto até 4 MB e banner até 8 MB. GIF continua animado.'),
+      field('Nome de exibição', name),
+      msg
+    ],
+    actions: [h('button', { class: 'btn secondary', onClick: closeModal }, 'Cancelar'), save]
+  });
+  render();
+
   save.addEventListener('click', async () => {
     const v = name.value.trim();
-    if (!v) return;
-    const { error } = await sb.from('profiles').update({ display_name: v }).eq('id', me.id);
-    if (error) { toast('Não foi possível salvar.'); return; }
-    me.display_name = v;
-    names.set(me.id, v);
-    renderMe();
-    closeModal();
-    loadMembers();
-    toast('Nome atualizado.');
+    if (!v) { msg.textContent = 'Coloque um nome.'; return; }
+    save.disabled = true;
+    save.textContent = 'Salvando…';
+    msg.textContent = '';
+    const patch = { display_name: v };
+    const toDelete = [];
+    try {
+      for (const kind of ['avatar', 'banner']) {
+        const col = kind + '_url';
+        if (pending[kind]) {
+          const path = `${me.id}/${kind}-${Date.now()}.${pending[kind].ext}`;
+          const up = await sb.storage.from('perfis').upload(path, pending[kind].blob, { contentType: pending[kind].type, cacheControl: '31536000', upsert: false });
+          if (up.error) throw new Error('Falha ao enviar a imagem: ' + up.error.message);
+          patch[col] = sb.storage.from('perfis').getPublicUrl(path).data.publicUrl;
+          if (me[col]) toDelete.push(storagePath(me[col]));
+        } else if (remove[kind]) {
+          patch[col] = null;
+          if (me[col]) toDelete.push(storagePath(me[col]));
+        }
+      }
+      const { error } = await sb.from('profiles').update(patch).eq('id', me.id);
+      if (error) throw new Error('Não foi possível salvar o perfil.');
+      const old = toDelete.filter(Boolean);
+      if (old.length) sb.storage.from('perfis').remove(old).catch(() => {});
+      Object.assign(me, patch);
+      setProf(me);
+      renderMe();
+      closeModal();
+      urls.forEach((u) => URL.revokeObjectURL(u));
+      loadMembers();
+      toast('Perfil atualizado!');
+    } catch (err) {
+      msg.textContent = err.message;
+      save.disabled = false;
+      save.textContent = 'Salvar';
+    }
   });
 }
 
@@ -993,11 +1195,17 @@ function roomMenu() {
 }
 
 function meMenu() {
-  const items = [
-    { title: me.display_name },
+  const items = [{ node: profileCard(me.id, me.display_name, myMember()) }, { title: 'Status' }];
+  for (const k of ['online', 'idle', 'dnd', 'invisible']) {
+    const b = h('button', { class: 'menu-item status-item' + (myStatus === k ? ' selected' : ''), role: 'menuitemradio', 'aria-checked': String(myStatus === k) },
+      statusDot(k === 'invisible' ? 'offline' : k),
+      h('span', { class: 'status-text' }, h('span', null, STATUS[k].label), STATUS[k].hint ? h('small', null, STATUS[k].hint) : null));
+    b.addEventListener('click', () => { closeMenu(); setMyStatus(k); });
+    items.push({ node: b });
+  }
+  items.push('sep',
     { label: 'Editar perfil', onClick: profileModal },
-    { label: 'Áudio e vídeo', onClick: settingsModal }
-  ];
+    { label: 'Áudio e vídeo', onClick: settingsModal });
   if (installPrompt) items.push({ label: 'Instalar app no PC', onClick: async () => { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; } });
   items.push('sep', { label: 'Sair da conta', danger: true, onClick: async () => { if (call.room) await leaveCall(true); await sb.auth.signOut(); location.reload(); } });
   openMenu($('me-btn'), items, { above: true });
