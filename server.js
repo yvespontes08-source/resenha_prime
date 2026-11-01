@@ -36,7 +36,14 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
+// HTML, JS e CSS: o navegador sempre confere se tem versão nova (atualizações aparecem na hora).
+// Ícones: podem ficar guardados por 1 dia.
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res, filePath) {
+    if (/\.(html|js|css|json|map)$/.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+    else res.setHeader('Cache-Control', 'public, max-age=86400');
+  }
+}));
 
 app.get('/health', (req, res) => res.send('ok'));
 
