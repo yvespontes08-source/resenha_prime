@@ -50,6 +50,11 @@ button { font: inherit; color: inherit; }
 }
 .btn-primary:hover { background: var(--accent-h); }
 .btn-primary:disabled { opacity: .6; cursor: wait; }
+.btn-install {
+  display: flex; align-items: center; justify-content: center; gap: 8px; background: transparent; border: 1px solid #4e5058;
+  border-radius: 4px; padding: 10px; color: var(--text-2); font-weight: 500; cursor: pointer;
+}
+.btn-install:hover { background: var(--bg-hover); color: var(--text); }
 
 /* ---------- Layout ---------- */
 .app { display: flex; height: 100vh; overflow: hidden; }

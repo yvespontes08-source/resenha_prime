@@ -675,6 +675,28 @@
 
   window.addEventListener('beforeunload', () => { socket.disconnect(); });
 
+  // ---------- Instalar como app (PWA) ----------
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+  let installPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    installPrompt = e;
+    $('install-btn').hidden = false;
+  });
+  $('install-btn').addEventListener('click', async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    $('install-btn').hidden = true;
+  });
+  window.addEventListener('appinstalled', () => {
+    $('install-btn').hidden = true;
+    toast('App instalado! Procure por Resenha no menu Iniciar.');
+  });
+
   // Expor para testes/depuração
   window.__resenha = { peers, users, get screenStream() { return screenStream; } };
 })();
