@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Resenha</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <!-- Tela de entrada -->
+  <main id="join-screen" class="join">
+    <form id="join-form" class="join-card">
+      <div class="join-logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+      </div>
+      <h1>Bora pra resenha?</h1>
+      <p class="muted">Entre numa sala para conversar e transmitir a tela com a galera.</p>
+      <label for="name-input">Seu nome</label>
+      <input id="name-input" maxlength="32" autocomplete="nickname" required placeholder="Ex.: Felps">
+      <label for="room-input">Código da sala</label>
+      <input id="room-input" maxlength="40" required placeholder="Ex.: resenha-dos-amigos">
+      <p class="hint">Quem usar o mesmo código entra na mesma sala.</p>
+      <button type="submit" class="btn-primary" id="join-btn">Entrar na sala</button>
+      <p id="join-error" class="error" role="alert"></p>
+    </form>
+  </main>
+
+  <!-- App -->
+  <div id="app" class="app" hidden>
+    <nav class="rail" aria-label="Servidores">
+      <div class="rail-icon active" id="rail-room" title="Sala"></div>
+      <div class="rail-sep"></div>
+      <button class="rail-icon add" id="invite-rail" title="Copiar convite" aria-label="Copiar link de convite">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </nav>
+
+    <aside class="sidebar">
+      <header class="sidebar-head">
+        <span id="room-title">sala</span>
+        <button class="icon-btn" id="invite-btn" title="Copiar convite" aria-label="Copiar link de convite">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+        </button>
+      </header>
+
+      <div class="channels">
+        <div class="cat">Canais de texto</div>
+        <div class="channel active">
+          <span class="hash">#</span> geral
+        </div>
+
+        <div class="cat">Canais de voz</div>
+        <div class="channel voice">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>
+          Sala de voz
+        </div>
+        <ul id="voice-users" class="voice-users"></ul>
+      </div>
+
+      <div class="voice-status">
+        <div>
+          <div class="vs-title"><span class="dot"></span> Voz conectada</div>
+          <div class="vs-sub" id="vs-sub">Sala de voz</div>
+        </div>
+        <button class="icon-btn danger" id="leave-btn" title="Sair da sala" aria-label="Sair da sala">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.7 13.3a16 16 0 0 0 3.4 2.6l1.3-1.3a2 2 0 0 1 2.1-.5 12.8 12.8 0 0 0 2.8.7A2 2 0 0 1 22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9"/><path d="M22 2 2 22"/></svg>
+        </button>
+      </div>
+
+      <footer class="user-panel">
+        <div class="me">
+          <div class="avatar sm" id="me-avatar"></div>
+          <div class="me-text">
+            <div class="me-name" id="me-name"></div>
+            <div class="me-sub">Online</div>
+          </div>
+        </div>
+        <div class="controls">
+          <button class="icon-btn" id="mic-btn" title="Desativar microfone" aria-label="Desativar microfone" aria-pressed="false"></button>
+          <button class="icon-btn" id="deaf-btn" title="Desativar áudio" aria-label="Desativar áudio" aria-pressed="false"></button>
+          <button class="icon-btn" id="screen-btn" title="Transmitir tela" aria-label="Transmitir tela" aria-pressed="false"></button>
+        </div>
+      </footer>
+    </aside>
+
+    <section class="stage-wrap">
+      <header class="topbar">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
+        <span class="topbar-title">Sala de voz</span>
+        <span class="topbar-count" id="count"></span>
+        <button class="icon-btn" id="chat-toggle" title="Mostrar chat" aria-label="Mostrar ou esconder chat">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </button>
+      </header>
+      <div id="stage" class="stage"></div>
+      <div class="stage-bar">
+        <button class="round" id="mic-btn-2" aria-label="Microfone"></button>
+        <button class="round" id="screen-btn-2" aria-label="Transmitir tela"></button>
+        <button class="round danger" id="leave-btn-2" aria-label="Sair da sala">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.7 13.3a16 16 0 0 0 3.4 2.6l1.3-1.3a2 2 0 0 1 2.1-.5 12.8 12.8 0 0 0 2.8.7A2 2 0 0 1 22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9"/><path d="M22 2 2 22"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <section class="chat" id="chat">
+      <header class="chat-head">
+        <span class="hash">#</span> geral
+        <button class="icon-btn" id="chat-close" title="Fechar chat" aria-label="Fechar chat" style="margin-left:auto">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </header>
+      <div class="messages" id="messages" aria-live="polite"></div>
+      <form id="chat-form" class="chat-form">
+        <label for="chat-input" class="sr-only">Mensagem</label>
+        <input id="chat-input" maxlength="2000" autocomplete="off" placeholder="Conversar em #geral">
+      </form>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" role="status"></div>
+  <div id="audio-bin" hidden></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
