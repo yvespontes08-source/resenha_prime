@@ -666,14 +666,53 @@ function wireChat() {
 // ---------- Visões (chat / call) ----------
 function setView(v) {
   view = v;
+  $('ch-updates').classList.toggle('active', v === 'updates');
   $('ch-chat').classList.toggle('active', v === 'chat');
   $('ch-call').classList.toggle('active', v === 'call');
+  $('updates-view').hidden = v !== 'updates';
   $('chat-view').hidden = v !== 'chat';
   $('call-view').hidden = v !== 'call';
-  $('top-icon').innerHTML = v === 'chat' ? '#' : ICON.mic;
-  $('top-title').textContent = v === 'chat' ? 'chat' : 'Call';
+  const icons = { updates: ICON.megaphone, chat: '#', call: ICON.mic };
+  const titles = { updates: 'atualizações', chat: 'chat', call: 'Call' };
+  $('top-icon').innerHTML = icons[v];
+  $('top-title').textContent = titles[v];
   $('app').classList.remove('show-side');
+  if (v === 'updates') renderUpdates();
   onCallChange();
+}
+
+// ---------- Canal de atualizações ----------
+let updates = [];
+async function loadUpdates() {
+  try {
+    const res = await fetch('/atualizacoes.json', { cache: 'no-cache' });
+    updates = await res.json();
+  } catch (_) { updates = []; }
+  const latest = updates[0] && updates[0].versao;
+  const seen = localStorage.getItem('resenha:versao-vista');
+  $('updates-badge').hidden = !latest || seen === latest;
+}
+
+function renderUpdates() {
+  const list = $('updates-list');
+  list.innerHTML = '';
+  list.append(h('div', { class: 'updates-head' },
+    h('h2', null, 'O que há de novo no Resenha'),
+    h('p', null, 'Toda atualização aparece aqui. Para pegar a versão nova, recarregue a página ou reabra o app.')));
+  updates.forEach((u, i) => {
+    const date = new Date(u.data + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+    list.append(h('article', { class: 'update-card' + (i === 0 ? ' latest' : '') },
+      h('div', { class: 'update-meta' },
+        h('span', { class: 'update-version' }, 'v' + u.versao),
+        i === 0 ? h('span', { class: 'new-badge' }, 'ATUAL') : null,
+        h('span', { class: 'update-date' }, date)),
+      h('h3', null, u.titulo),
+      h('ul', null, u.itens.map((t) => h('li', null, t)))));
+  });
+  if (updates[0]) {
+    localStorage.setItem('resenha:versao-vista', updates[0].versao);
+    $('updates-badge').hidden = true;
+  }
 }
 
 // ---------- Call: prévia de quem está lá ----------
@@ -1239,6 +1278,8 @@ function wireStatic() {
   $('room-menu-btn').addEventListener('click', roomMenu);
   $('me-btn').addEventListener('click', meMenu);
   $('ch-chat').addEventListener('click', () => current && setView('chat'));
+  $('ch-updates').addEventListener('click', () => setView('updates'));
+  loadUpdates();
   $('ch-call').addEventListener('click', () => {
     if (!current) return;
     if (call.room && call.roomId === current.id) setView('call');

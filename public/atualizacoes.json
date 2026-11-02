@@ -1,0 +1,53 @@
+[
+  {
+    "versao": "2.2",
+    "data": "2026-11-01",
+    "titulo": "App fácil de instalar e canal de atualizações",
+    "itens": [
+      "Botão \"Instalar o app no PC\" na tela de login e na barra de salas (Chrome e Edge)",
+      "Atualizações do site agora aparecem na hora, só recarregando a página",
+      "Este canal #atualizações, para todo mundo saber o que mudou"
+    ]
+  },
+  {
+    "versao": "2.1",
+    "data": "2026-11-01",
+    "titulo": "Perfil personalizado",
+    "itens": [
+      "Status: Online, Ausente, Não perturbe e Invisível (clique na sua foto lá embaixo)",
+      "Fica Ausente sozinho depois de 10 minutos parado",
+      "Não perturbe deixa os sons de entrada e saída mudos",
+      "Foto de perfil e banner, com suporte a GIF animado",
+      "Cartão de perfil ao clicar no nome de alguém",
+      "Lista de membros separando quem está online e offline"
+    ]
+  },
+  {
+    "versao": "2.0",
+    "data": "2026-11-01",
+    "titulo": "Contas, salas, cargos e call nova",
+    "itens": [
+      "Cadastro, login e recuperação de senha",
+      "Criar salas públicas ou privadas e convidar por link",
+      "Cargos: dono, moderador, membro e cargos personalizados com cor e permissões",
+      "Expulsar e banir (derruba da call na hora)",
+      "Chat salvo: as mensagens ficam guardadas mesmo fora da call",
+      "Call nova com servidor próprio: aguenta 7 a 10 pessoas sem pesar no PC",
+      "Volume individual de cada pessoa (0 a 200%)",
+      "Escolha de microfone, fone e câmera, com teste de microfone",
+      "Cancelamento de eco e de ruído",
+      "Câmera e transmissão de tela com áudio"
+    ]
+  },
+  {
+    "versao": "1.0",
+    "data": "2026-11-01",
+    "titulo": "Primeira versão",
+    "itens": [
+      "Sala de voz com indicador de quem está falando",
+      "Transmissão de tela em destaque, com tela cheia",
+      "Chat de texto com links clicáveis",
+      "App instalável no PC"
+    ]
+  }
+]
