@@ -73,7 +73,27 @@ async function boot() {
   if (session) startApp(); else showAuth('login');
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; });
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; showInstall(true); });
+  window.addEventListener('appinstalled', () => { installPrompt = null; showInstall(false); toast('App instalado! Procure por Resenha no menu Iniciar.', 4000); });
+  $('install-auth').addEventListener('click', installApp);
+  $('install-rail').addEventListener('click', installApp);
+}
+
+// ================= Instalar como app =================
+function showInstall(v) {
+  $('install-auth').hidden = !v;
+  $('install-rail').hidden = !v;
+}
+async function installApp() {
+  if (!installPrompt) {
+    toast('Use o ícone de instalar na barra de endereço do Chrome ou do Edge.', 4000);
+    return;
+  }
+  installPrompt.prompt();
+  const choice = await installPrompt.userChoice;
+  installPrompt = null;
+  showInstall(false);
+  if (choice && choice.outcome === 'accepted') toast('Instalando…');
 }
 
 // ================= Login =================
@@ -1206,7 +1226,7 @@ function meMenu() {
   items.push('sep',
     { label: 'Editar perfil', onClick: profileModal },
     { label: 'Áudio e vídeo', onClick: settingsModal });
-  if (installPrompt) items.push({ label: 'Instalar app no PC', onClick: async () => { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; } });
+  if (installPrompt) items.push({ label: 'Instalar app no PC', onClick: installApp });
   items.push('sep', { label: 'Sair da conta', danger: true, onClick: async () => { if (call.room) await leaveCall(true); await sb.auth.signOut(); location.reload(); } });
   openMenu($('me-btn'), items, { above: true });
 }
