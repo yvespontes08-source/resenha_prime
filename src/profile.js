@@ -59,3 +59,27 @@ export function storagePath(url) {
   const i = url.indexOf('/storage/v1/object/public/perfis/');
   return i === -1 ? null : decodeURIComponent(url.slice(i + '/storage/v1/object/public/perfis/'.length).split('?')[0]);
 }
+
+// Imagem para o chat: até 8 MB; GIF vai como está; as outras são reduzidas para no máximo 1600 px
+export async function prepareChatImage(file) {
+  if (!file) throw new Error('Nenhum arquivo escolhido.');
+  if (file.size > 8 * 1024 * 1024) throw new Error('A imagem pode ter no máximo 8 MB.');
+  const type = await sniff(file);
+  if (!type) throw new Error('Formato não aceito. Use PNG, JPG, WebP ou GIF.');
+  if (type === 'image/gif') return { blob: file, type, ext: 'gif' };
+  let bmp;
+  try { bmp = await createImageBitmap(file); } catch (_) { throw new Error('Não consegui ler essa imagem.'); }
+  if (bmp.width > 12000 || bmp.height > 12000) throw new Error('Imagem grande demais.');
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bmp.width * scale);
+  canvas.height = Math.round(bmp.height * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  bmp.close && bmp.close();
+  let blob = await toBlob(canvas, 'image/webp', 0.86);
+  if (blob && blob.type === 'image/webp') return { blob, type: 'image/webp', ext: 'webp' };
+  blob = await toBlob(canvas, 'image/jpeg', 0.86);
+  return { blob, type: 'image/jpeg', ext: 'jpg' };
+}

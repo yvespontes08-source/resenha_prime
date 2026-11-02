@@ -1,5 +1,19 @@
 [
   {
+    "versao": "2.3",
+    "data": "2026-11-02",
+    "titulo": "Menções, notificações, imagens e insígnias",
+    "itens": [
+      "Marque alguém com @ no chat: aparece a lista de membros para escolher, e quem foi marcado vê a mensagem destacada",
+      "Contador de mensagens não lidas e de menções em cada sala, e no título da aba",
+      "Avisos no computador e som quando chega mensagem (ajuste em: sua foto → Notificações)",
+      "Mande fotos e GIFs no chat pelo botão de imagem, colando (Ctrl+V) ou arrastando o arquivo",
+      "Seletor de emojis no chat, com os que você mais usa",
+      "Insígnias no perfil: Membro fundador, Veterano, Papo longo, Tagarela, Coruja, Madrugador, Apresentador, Cineasta e Estiloso",
+      "Aviso na hora quando você ganha uma insígnia nova"
+    ]
+  },
+  {
     "versao": "2.2",
     "data": "2026-11-01",
     "titulo": "App fácil de instalar e canal de atualizações",

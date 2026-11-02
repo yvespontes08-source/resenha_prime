@@ -2,9 +2,11 @@
 import { createClient } from '@supabase/supabase-js';
 import {
   $, h, ICON, avatar, colorFor, toast, openMenu, closeMenu, openModal, closeModal, confirmModal,
-  field, linkify, fmtTime, STATUS, statusDot, setBeepsMuted
+  field, linkify, fmtTime, STATUS, statusDot, setBeepsMuted, beep
 } from './ui.js';
-import { prepareImage, storagePath } from './profile.js';
+import { prepareImage, prepareChatImage, storagePath } from './profile.js';
+import { openEmojiPicker } from './emoji.js';
+import { badgeIcon, badgeRow, RARITY_LABEL } from './badges.js';
 import {
   call, joinCall, leaveCall, toggleMic, setDeafened, toggleCam, toggleScreen, participants, renderStage,
   getVolume, setVolume, loadSettings, saveSettings, switchDevice, applyAudioFilters, listDevices
@@ -230,6 +232,13 @@ async function startApp() {
   setBeepsMuted(myStatus === 'dnd');
   renderMe();
   startPresence();
+  loadBadgeDefs();
+  sb.rpc('check_my_badges').then(() => {}, () => {});
+  setInterval(() => {
+    if (call.room && call.room.state === 'connected') {
+      sb.rpc('call_heartbeat', { p_sharing: Boolean(call.room.localParticipant.isScreenShareEnabled) }).then(() => {}, () => {});
+    }
+  }, 60000);
 
   call.onChange = onCallChange;
   call.avatarUrl = (id) => (profs.get(id) || {}).avatar_url || null;
@@ -240,6 +249,9 @@ async function startApp() {
   const last = localStorage.getItem('resenha:last-room');
   const pick = rooms.find((r) => r.id === last) || rooms[0];
   if (pick) await openRoom(pick.id); else renderEmpty();
+
+  // Gancho só para testes locais (não existe no site publicado)
+  if (location.hostname === 'localhost') window.__resenhaTest = { onIncoming, unread };
 
   const invite = sessionStorage.getItem('resenha:invite');
   if (invite) { sessionStorage.removeItem('resenha:invite'); handleInvite(invite); }
@@ -360,6 +372,9 @@ function renderRail() {
       title: r.name, 'aria-label': r.name, style: { background: current && current.id === r.id ? '' : undefined }
     }, r.name.trim().charAt(0).toUpperCase());
     if (call.room && call.roomId === r.id) b.append(h('span', { class: 'live-dot', title: 'Você está na call desta sala' }));
+    const u = unread.get(r.id);
+    if (u && u.n && !(current && current.id === r.id)) b.classList.add('has-unread');
+    if (u && u.mentions) b.append(h('span', { class: 'mention-count', title: `${u.mentions} ${u.mentions === 1 ? 'menção' : 'menções'}` }, u.mentions > 99 ? '99+' : String(u.mentions)));
     b.addEventListener('click', () => {
       if (innerWidth <= 560 && current && current.id === r.id) { $('app').classList.toggle('show-side'); return; }
       openRoom(r.id);
@@ -526,13 +541,6 @@ async function runModerate(userId, action, reason) {
 function subscribeRoom(id) {
   if (roomChannel) sb.removeChannel(roomChannel);
   roomChannel = sb.channel('sala-' + id)
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${id}` }, (p) => {
-      if (current && current.id === id) appendMessage(p.new, true);
-    })
-    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, (p) => {
-      const el = document.querySelector(`[data-mid="${p.old.id}"]`);
-      if (el) el.remove();
-    })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${id}` }, () => loadMembers())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'room_roles', filter: `room_id=eq.${id}` }, () => loadMembers())
     .subscribe();
@@ -540,6 +548,13 @@ function subscribeRoom(id) {
 
 function subscribeMe() {
   meChannel = sb.channel('eu-' + me.id)
+    // Mensagens de TODAS as minhas salas (o banco só entrega as das salas em que sou membro)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (p) => onIncoming(p.new))
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, (p) => {
+      const el = p.old && document.querySelector(`[data-mid="${p.old.id}"]`);
+      if (el) el.remove();
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'user_badges', filter: `user_id=eq.${me.id}` }, (p) => onBadgeEarned(p.new))
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, (p) => {
       if (!p.new || !p.new.id) return;
       setProf(p.new);
@@ -563,16 +578,192 @@ function subscribeMe() {
     .subscribe();
 }
 
+// ---------- Notificações e não lidas ----------
+const unread = new Map(); // roomId -> { n, mentions }
+const NOTIF_KEY = 'resenha:notificacoes';
+function notifPrefs() {
+  const def = { desktop: false, mode: 'mentions', sound: true };
+  try { return { ...def, ...JSON.parse(localStorage.getItem(NOTIF_KEY) || '{}') }; } catch (_) { return def; }
+}
+function saveNotifPrefs(p) { localStorage.setItem(NOTIF_KEY, JSON.stringify(p)); }
+
+function seeingRoom(roomId) {
+  return current && current.id === roomId && view === 'chat' && document.visibilityState === 'visible' && document.hasFocus();
+}
+function addUnread(roomId, mention) {
+  const u = unread.get(roomId) || { n: 0, mentions: 0 };
+  u.n += 1;
+  if (mention) u.mentions += 1;
+  unread.set(roomId, u);
+  renderUnread();
+}
+function clearUnread(roomId) {
+  if (!roomId || !unread.has(roomId)) return;
+  unread.delete(roomId);
+  renderUnread();
+}
+function renderUnread() {
+  let mentions = 0, any = false;
+  for (const [id, u] of unread) {
+    if (!rooms.some((r) => r.id === id)) { unread.delete(id); continue; }
+    mentions += u.mentions;
+    any = any || u.n > 0;
+  }
+  document.title = (mentions ? `(${mentions}) ` : any ? '• ' : '') + 'Resenha';
+  renderRail();
+  const u = current && unread.get(current.id);
+  $('ch-chat').classList.toggle('unread', Boolean(u && u.n));
+}
+
+async function onIncoming(m) {
+  if (!m || !rooms.some((r) => r.id === m.room_id)) return;
+  if (current && current.id === m.room_id) appendMessage(m, true);
+  if (m.user_id === me.id) return;
+  const mention = mentionsMe(m.content);
+  const seeing = seeingRoom(m.room_id);
+  if (!seeing) addUnread(m.room_id, mention);
+  await ensureNames([m.user_id]);
+  notifyMessage(m, mention, seeing);
+}
+
+function notifyMessage(m, mention, seeing) {
+  if (myStatus === 'dnd') return;
+  const prefs = notifPrefs();
+  if (prefs.mode === 'none' || (prefs.mode === 'mentions' && !mention)) return;
+  if (seeing && !mention) return;
+  if (prefs.sound) { if (mention) beep(880, 1320); else beep(620, 720); }
+  if (!seeing && prefs.desktop && 'Notification' in window && Notification.permission === 'granted' && (document.hidden || !document.hasFocus())) {
+    const room = rooms.find((r) => r.id === m.room_id);
+    const who = names.get(m.user_id) || 'Alguém';
+    const body = m.content ? plainText(m.content).slice(0, 140) : '📷 Imagem';
+    try {
+      const n = new Notification(mention ? `${who} te marcou em ${room ? room.name : 'uma sala'}` : `${who} em ${room ? room.name : 'uma sala'}`, {
+        body, tag: 'resenha-' + m.room_id, icon: (profs.get(m.user_id) || {}).avatar_url || '/icons/icon-192.png'
+      });
+      n.onclick = () => { window.focus(); openRoom(m.room_id).then(() => setView('chat')); n.close(); };
+    } catch (_) {}
+  }
+}
+
+window.addEventListener('focus', () => { if (current && view === 'chat') clearUnread(current.id); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && current && view === 'chat' && document.hasFocus()) clearUnread(current.id); });
+
+// ---------- Menções ----------
+const MENTION_RE = /<@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})>/gi;
+function mentionsMe(content) { return Boolean(content) && content.toLowerCase().includes(`<@${me.id}>`); }
+function plainText(content) {
+  return String(content || '').replace(MENTION_RE, (_, id) => '@' + (names.get(id.toLowerCase()) || 'alguém'));
+}
+function escapeRe(t) { return t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+// Troca "@Nome" (de quem é membro da sala) pelo código <@id> antes de salvar
+function encodeMentions(text) {
+  const list = [...members].sort((a, b) => b.name.length - a.name.length);
+  let out = text;
+  for (const m of list) {
+    const re = new RegExp('@' + escapeRe(m.name) + '(?=$|[\\s.,!?;:)\\]])', 'g');
+    out = out.replace(re, `<@${m.user_id}>`);
+  }
+  return out;
+}
+function renderContent(container, content) {
+  const parts = String(content || '').split(MENTION_RE);
+  parts.forEach((part, i) => {
+    if (i % 2 === 1) {
+      const id = part.toLowerCase();
+      const chip = h('button', { type: 'button', class: 'mention' + (id === me.id ? ' mention-self' : '') }, '@' + (names.get(id) || 'alguém'));
+      chip.addEventListener('click', () => memberMenu(chip, id));
+      container.append(chip);
+    } else if (part) {
+      linkify(container, part);
+    }
+  });
+}
+
+let mentionState = null; // { start, query, items, index }
+function updateMentionPopup() {
+  const input = $('chat-input');
+  const pop = $('mention-pop');
+  const before = input.value.slice(0, input.selectionStart);
+  const m = before.match(/(^|\s)@([^\s@]{0,24})$/);
+  if (!m || !members.length) { closeMentionPopup(); return; }
+  const query = m[2].toLowerCase();
+  const items = members
+    .filter((x) => x.user_id !== me.id && x.name.toLowerCase().includes(query))
+    .sort((a, b) => (a.name.toLowerCase().startsWith(query) ? 0 : 1) - (b.name.toLowerCase().startsWith(query) ? 0 : 1) || a.name.localeCompare(b.name))
+    .slice(0, 8);
+  if (!items.length) { closeMentionPopup(); return; }
+  mentionState = { start: before.length - m[2].length - 1, items, index: 0 };
+  renderMentionPopup();
+  pop.hidden = false;
+}
+function renderMentionPopup() {
+  const pop = $('mention-pop');
+  pop.innerHTML = '';
+  pop.append(h('div', { class: 'mention-head' }, 'Membros'));
+  mentionState.items.forEach((x, i) => {
+    const b = h('button', { type: 'button', class: 'mention-item' + (i === mentionState.index ? ' active' : ''), role: 'option', 'aria-selected': String(i === mentionState.index) },
+      avatarOf(x.user_id, x.name, 'sm', true), h('span', { style: { color: nameColor(x) || '' } }, x.name));
+    b.addEventListener('mousedown', (e) => { e.preventDefault(); pickMention(i); });
+    pop.append(b);
+  });
+}
+function closeMentionPopup() { mentionState = null; $('mention-pop').hidden = true; }
+function pickMention(i) {
+  const input = $('chat-input');
+  const x = mentionState.items[i];
+  const caret = input.selectionStart;
+  const text = input.value;
+  const insert = '@' + x.name + ' ';
+  input.value = text.slice(0, mentionState.start) + insert + text.slice(caret);
+  const pos = mentionState.start + insert.length;
+  input.setSelectionRange(pos, pos);
+  closeMentionPopup();
+  input.dispatchEvent(new Event('input'));
+  input.focus();
+}
+
+// ---------- Imagens no chat (bucket privado, links assinados) ----------
+const signed = new Map(); // caminho -> { url, exp }
+async function signedUrls(paths) {
+  const now = Date.now();
+  const need = [...new Set(paths)].filter((p) => !signed.has(p) || signed.get(p).exp < now + 60000);
+  if (need.length) {
+    const { data } = await sb.storage.from('chat').createSignedUrls(need, 3600);
+    for (const d of data || []) if (d.signedUrl && d.path) signed.set(d.path, { url: d.signedUrl, exp: now + 3600 * 1000 });
+  }
+  return paths.map((p) => (signed.get(p) || {}).url || null);
+}
+async function hydrateImages(root) {
+  const imgs = [...root.querySelectorAll('img.msg-img[data-path]:not([src])')];
+  if (!imgs.length) return;
+  const urls = await signedUrls(imgs.map((i) => i.dataset.path));
+  const box = $('messages');
+  imgs.forEach((img, i) => {
+    if (!urls[i]) { img.replaceWith(h('div', { class: 'msg-img-missing' }, 'Imagem indisponível')); return; }
+    img.addEventListener('load', () => {
+      if (box.scrollHeight - box.scrollTop - box.clientHeight < 400) box.scrollTop = box.scrollHeight;
+    }, { once: true });
+    img.src = urls[i];
+  });
+}
+function openLightbox(src) {
+  const img = h('img', { src, alt: 'Imagem enviada no chat', class: 'lightbox-img' });
+  openModal({ title: 'Imagem', wide: true, body: [img, h('a', { href: src, target: '_blank', rel: 'noopener noreferrer', class: 'link' }, 'Abrir original em outra aba')] });
+}
+
 // ---------- Chat ----------
+const MSG_FIELDS = 'id, room_id, user_id, content, created_at, attachment_path, attachment_type';
 async function loadMessages(reset) {
   if (!current) return;
   const id = current.id;
-  let q = sb.from('messages').select('id, user_id, content, created_at').eq('room_id', id).order('id', { ascending: false }).limit(50);
+  let q = sb.from('messages').select(MSG_FIELDS).eq('room_id', id).order('id', { ascending: false }).limit(50);
   if (!reset && oldestId) q = q.lt('id', oldestId);
   const { data, error } = await q;
   if (error || !current || current.id !== id) return;
   const list = (data || []).reverse();
-  await ensureNames(list.map((m) => m.user_id));
+  const mentioned = [];
+  for (const m of list) for (const x of String(m.content || '').matchAll(MENTION_RE)) mentioned.push(x[1].toLowerCase());
+  await ensureNames([...list.map((m) => m.user_id), ...mentioned]);
   const box = $('messages');
   if (reset) {
     box.innerHTML = '';
@@ -596,6 +787,7 @@ async function loadMessages(reset) {
   if (list.length) oldestId = list[0].id;
   if (reset) { lastMsg = list[list.length - 1] || null; box.scrollTop = box.scrollHeight; }
   else box.scrollTop = box.scrollHeight - prevHeight;
+  hydrateImages(box);
 }
 
 async function ensureNames(ids) {
@@ -615,15 +807,24 @@ function messageEl(m, prev) {
       h('span', { class: 'msg-name', style: { color: nameColor(mem) || colorFor(m.user_id) } }, name),
       h('span', { class: 'msg-time' }, fmtTime(m.created_at))));
   }
-  const text = h('div', { class: 'msg-text', title: cont ? fmtTime(m.created_at) : null });
-  linkify(text, m.content);
-  body.append(text);
-  const row = h('div', { class: 'msg-row' + (cont ? ' cont' : ''), 'data-mid': String(m.id) }, avatarOf(m.user_id, name), body);
+  if (m.content) {
+    const text = h('div', { class: 'msg-text', title: cont ? fmtTime(m.created_at) : null });
+    renderContent(text, m.content);
+    body.append(text);
+  }
+  if (m.attachment_path) {
+    const img = h('img', { class: 'msg-img', 'data-path': m.attachment_path, alt: 'Imagem enviada por ' + name, loading: 'lazy' });
+    img.addEventListener('click', () => img.src && openLightbox(img.src));
+    body.append(img);
+  }
+  const row = h('div', { class: 'msg-row' + (cont ? ' cont' : '') + (mentionsMe(m.content) ? ' mentioned' : ''), 'data-mid': String(m.id) }, avatarOf(m.user_id, name), body);
   if (m.user_id === me.id || can('delete_messages')) {
     const del = h('button', { class: 'icon-btn msg-del', title: 'Apagar mensagem', 'aria-label': 'Apagar mensagem', html: ICON.trash });
     del.addEventListener('click', async () => {
       const { error } = await sb.from('messages').delete().eq('id', m.id);
-      if (error) toast('Não foi possível apagar.'); else row.remove();
+      if (error) { toast('Não foi possível apagar.'); return; }
+      row.remove();
+      if (m.attachment_path && m.user_id === me.id) sb.storage.from('chat').remove([m.attachment_path]).catch(() => {});
     });
     row.append(del);
   }
@@ -634,32 +835,112 @@ function messageEl(m, prev) {
 
 async function appendMessage(m, live) {
   if (document.querySelector(`[data-mid="${m.id}"]`)) return;
-  await ensureNames([m.user_id]);
+  const mentioned = [...String(m.content || '').matchAll(MENTION_RE)].map((x) => x[1].toLowerCase());
+  await ensureNames([m.user_id, ...mentioned]);
+  if (document.querySelector(`[data-mid="${m.id}"]`)) return;
   const box = $('messages');
-  const empty = box.querySelector('.empty-chat');
   const near = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
-  box.append(messageEl(m, lastMsg));
+  const el = messageEl(m, lastMsg);
+  box.append(el);
   lastMsg = m;
-  if (empty && live) { /* mantém a mensagem de boas-vindas */ }
   if (near || m.user_id === me.id) box.scrollTop = box.scrollHeight;
+  hydrateImages(el);
+}
+
+let pendingImage = null; // { blob, type, ext, url }
+function setPendingImage(img) {
+  if (pendingImage && pendingImage.url) URL.revokeObjectURL(pendingImage.url);
+  pendingImage = img;
+  const box = $('attach-preview');
+  box.innerHTML = '';
+  box.hidden = !img;
+  if (!img) return;
+  const remove = h('button', { type: 'button', class: 'icon-btn', title: 'Tirar imagem', 'aria-label': 'Tirar imagem', html: ICON.close });
+  remove.addEventListener('click', () => setPendingImage(null));
+  box.append(h('img', { src: img.url, alt: 'Prévia da imagem' }), h('span', { class: 'attach-name' }, img.type === 'image/gif' ? 'GIF' : 'Imagem'), remove);
+}
+async function attachFile(file) {
+  if (!file || !current) return;
+  try {
+    const out = await prepareChatImage(file);
+    setPendingImage({ ...out, url: URL.createObjectURL(out.blob) });
+    $('chat-input').focus();
+  } catch (err) { toast(err.message, 4000); }
 }
 
 function wireChat() {
   const input = $('chat-input');
   const autosize = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 200) + 'px'; };
-  input.addEventListener('input', autosize);
+  input.addEventListener('input', () => { autosize(); updateMentionPopup(); });
+  input.addEventListener('click', updateMentionPopup);
+  input.addEventListener('blur', () => setTimeout(closeMentionPopup, 150));
   input.addEventListener('keydown', (e) => {
+    if (mentionState) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); mentionState.index = (mentionState.index + 1) % mentionState.items.length; renderMentionPopup(); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); mentionState.index = (mentionState.index - 1 + mentionState.items.length) % mentionState.items.length; renderMentionPopup(); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionState.index); return; }
+      if (e.key === 'Escape') { e.preventDefault(); closeMentionPopup(); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(); }
   });
+  input.addEventListener('paste', (e) => {
+    const file = [...(e.clipboardData ? e.clipboardData.files : [])].find((f) => f.type.startsWith('image/'));
+    if (file) { e.preventDefault(); attachFile(file); }
+  });
+  const view = $('chat-view');
+  view.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); view.classList.add('dropping'); } });
+  view.addEventListener('dragleave', (e) => { if (e.target === view || !view.contains(e.relatedTarget)) view.classList.remove('dropping'); });
+  view.addEventListener('drop', (e) => {
+    view.classList.remove('dropping');
+    const file = e.dataTransfer && [...e.dataTransfer.files].find((f) => f.type.startsWith('image/'));
+    if (file) { e.preventDefault(); attachFile(file); }
+  });
+  $('attach-btn').addEventListener('click', () => $('attach-input').click());
+  $('attach-input').addEventListener('change', () => { const f = $('attach-input').files[0]; $('attach-input').value = ''; attachFile(f); });
+  $('emoji-btn').addEventListener('click', () => openEmojiPicker($('emoji-btn'), (emo) => {
+    const a = input.selectionStart ?? input.value.length;
+    const b = input.selectionEnd ?? a;
+    input.value = input.value.slice(0, a) + emo + input.value.slice(b);
+    input.setSelectionRange(a + emo.length, a + emo.length);
+    input.focus();
+    autosize();
+  }));
   $('chat-form').addEventListener('submit', (e) => { e.preventDefault(); sendMessage(); });
+
+  let sending = false;
   async function sendMessage() {
-    const text = input.value.trim();
-    if (!text || !current) return;
+    if (sending || !current) return;
+    const raw = input.value.trim();
+    const img = pendingImage;
+    if (!raw && !img) return;
+    sending = true;
+    const roomId = current.id;
+    const row = { room_id: roomId, user_id: me.id, content: encodeMentions(raw).slice(0, 2000) };
     input.value = '';
     autosize();
-    const { data, error } = await sb.from('messages').insert({ room_id: current.id, user_id: me.id, content: text.slice(0, 2000) }).select().single();
-    if (error) { toast(traduzir(error.message)); input.value = text; autosize(); return; }
-    appendMessage(data, true);
+    closeMentionPopup();
+    try {
+      if (img) {
+        const path = `${roomId}/${me.id}/${Date.now()}.${img.ext}`;
+        const up = await sb.storage.from('chat').upload(path, img.blob, { contentType: img.type, cacheControl: '31536000', upsert: false });
+        if (up.error) throw new Error('Não consegui enviar a imagem (rodou o SQL da v2.3?).');
+        row.attachment_path = path;
+        row.attachment_type = img.type;
+      }
+      const { data, error } = await sb.from('messages').insert(row).select(MSG_FIELDS).single();
+      if (error) {
+        if (row.attachment_path) sb.storage.from('chat').remove([row.attachment_path]).catch(() => {});
+        throw new Error(traduzir(error.message));
+      }
+      setPendingImage(null);
+      appendMessage(data, true);
+    } catch (err) {
+      toast(err.message, 4000);
+      input.value = raw;
+      autosize();
+    } finally {
+      sending = false;
+    }
   }
 }
 
@@ -678,6 +959,7 @@ function setView(v) {
   $('top-title').textContent = titles[v];
   $('app').classList.remove('show-side');
   if (v === 'updates') renderUpdates();
+  if (v === 'chat' && current) clearUnread(current.id);
   onCallChange();
 }
 
@@ -1072,7 +1354,61 @@ function profileCard(userId, name, m) {
       avatar(userId, name, 'xl', p.avatar_url, st),
       h('div', { class: 'pcard-name', style: { color: m ? nameColor(m) || '' : '' } }, name),
       h('div', { class: 'pcard-status' }, statusDot(st), STATUS[st].label),
-      role ? h('div', { class: 'pcard-role' }, role) : null));
+      role ? h('div', { class: 'pcard-role' }, role) : null,
+      badgeSlot(userId)));
+}
+
+// ---------- Insígnias ----------
+let badgeDefs = [];
+const userBadges = new Map(); // userId -> { at, list }
+async function loadBadgeDefs() {
+  const { data } = await sb.from('badges').select('*').order('sort');
+  badgeDefs = data || [];
+}
+async function getUserBadges(userId, fresh) {
+  const c = userBadges.get(userId);
+  if (c && !fresh && Date.now() - c.at < 60000) return c.list;
+  const { data } = await sb.from('user_badges').select('badge_id, earned_at').eq('user_id', userId);
+  const list = data || [];
+  userBadges.set(userId, { at: Date.now(), list });
+  return list;
+}
+// Espaço no cartão que se preenche quando as insígnias chegam
+function badgeSlot(userId) {
+  const slot = h('div', { class: 'badge-slot' });
+  getUserBadges(userId).then((list) => {
+    const row = badgeRow(badgeDefs, list);
+    if (row) slot.append(row);
+  }).catch(() => {});
+  return slot;
+}
+function onBadgeEarned(row) {
+  if (!row) return;
+  userBadges.delete(me.id);
+  const def = badgeDefs.find((d) => d.id === row.badge_id);
+  if (!def) return;
+  beep(660, 990);
+  setTimeout(() => beep(990, 1320), 180);
+  toast(`🏅 Nova insígnia: ${def.name}! ${def.description}.`, 5000);
+}
+
+// Todas as insígnias: as conquistadas coloridas, as que faltam apagadas com a dica de como ganhar
+function allBadgesSection() {
+  const grid = h('div', { class: 'badge-grid' }, h('p', { class: 'hint' }, 'Carregando…'));
+  const box = h('div', { class: 'field' }, h('span', { class: 'label' }, 'Insígnias'), grid);
+  getUserBadges(me.id, true).then((list) => {
+    grid.innerHTML = '';
+    const got = new Map(list.map((x) => [x.badge_id, x.earned_at]));
+    for (const d of badgeDefs) {
+      grid.append(h('div', { class: 'badge-cell' + (got.has(d.id) ? '' : ' locked') },
+        badgeIcon(d, got.get(d.id)),
+        h('div', { class: 'badge-info' },
+          h('div', { class: 'badge-name' }, d.name, h('span', { class: 'rarity r-' + d.rarity }, RARITY_LABEL[d.rarity] || d.rarity)),
+          h('div', { class: 'badge-desc' }, got.has(d.id) ? `${d.description} · ${new Date(got.get(d.id)).toLocaleDateString('pt-BR')}` : d.description))));
+    }
+    if (!badgeDefs.length) grid.append(h('p', { class: 'hint' }, 'As insígnias aparecem depois de rodar o SQL da v2.3.'));
+  }).catch(() => { grid.innerHTML = ''; });
+  return box;
 }
 
 function profileModal() {
@@ -1132,6 +1468,7 @@ function profileModal() {
       btnRow('Banner', bnIn, 'banner'),
       h('p', { class: 'hint' }, 'PNG, JPG, WebP ou GIF. Foto até 4 MB e banner até 8 MB. GIF continua animado.'),
       field('Nome de exibição', name),
+      allBadgesSection(),
       msg
     ],
     actions: [h('button', { class: 'btn secondary', onClick: closeModal }, 'Cancelar'), save]
@@ -1176,6 +1513,47 @@ function profileModal() {
       save.disabled = false;
       save.textContent = 'Salvar';
     }
+  });
+}
+
+function notifModal() {
+  const prefs = notifPrefs();
+  const supported = 'Notification' in window;
+  const desktop = h('input', { type: 'checkbox', checked: prefs.desktop && supported && Notification.permission === 'granted', disabled: !supported });
+  const sound = h('input', { type: 'checkbox', checked: prefs.sound });
+  const msg = h('p', { class: 'msg' });
+  const modes = [['all', 'Todas as mensagens'], ['mentions', 'Só quando me marcarem (@)'], ['none', 'Nada']];
+  const radios = modes.map(([v, label]) => {
+    const r = h('input', { type: 'radio', name: 'notif-mode', value: v, checked: prefs.mode === v });
+    return h('label', { class: 'check' }, r, label);
+  });
+  const save = () => {
+    const mode = (document.querySelector('input[name="notif-mode"]:checked') || {}).value || 'mentions';
+    saveNotifPrefs({ desktop: desktop.checked, mode, sound: sound.checked });
+  };
+  desktop.addEventListener('change', async () => {
+    if (desktop.checked && Notification.permission !== 'granted') {
+      const res = await Notification.requestPermission();
+      if (res !== 'granted') {
+        desktop.checked = false;
+        msg.textContent = 'O navegador bloqueou as notificações. Libere no cadeado ao lado do endereço do site.';
+      }
+    }
+    save();
+  });
+  sound.addEventListener('change', save);
+  radios.forEach((l) => l.querySelector('input').addEventListener('change', save));
+  openModal({
+    title: 'Notificações',
+    body: [
+      h('div', { class: 'field' }, h('span', { class: 'label' }, 'Me avisar de'), ...radios),
+      h('label', { class: 'check' }, desktop, 'Mostrar aviso no computador quando o Resenha estiver em segundo plano'),
+      h('label', { class: 'check' }, sound, 'Tocar som'),
+      supported ? null : h('p', { class: 'hint' }, 'Este navegador não suporta avisos no computador.'),
+      h('p', { class: 'hint' }, 'No status "Não perturbe" nada toca nem aparece, só o contador nas salas.'),
+      msg
+    ],
+    actions: [h('button', { class: 'btn primary', onClick: closeModal }, 'Pronto')]
   });
 }
 
@@ -1264,6 +1642,7 @@ function meMenu() {
   }
   items.push('sep',
     { label: 'Editar perfil', onClick: profileModal },
+    { label: 'Notificações', onClick: notifModal },
     { label: 'Áudio e vídeo', onClick: settingsModal });
   if (installPrompt) items.push({ label: 'Instalar app no PC', onClick: installApp });
   items.push('sep', { label: 'Sair da conta', danger: true, onClick: async () => { if (call.room) await leaveCall(true); await sb.auth.signOut(); location.reload(); } });
