@@ -7,6 +7,7 @@ import {
 import { prepareImage, prepareChatImage, storagePath } from './profile.js';
 import { openEmojiPicker } from './emoji.js';
 import { badgeIcon, badgeRow, RARITY_LABEL } from './badges.js';
+import { COMMANDS, parseCommand, resultCard, BOT_ICON } from './draw.js';
 import {
   call, joinCall, leaveCall, toggleMic, setDeafened, toggleCam, toggleScreen, participants, renderStage,
   getVolume, setVolume, loadSettings, saveSettings, switchDevice, applyAudioFilters, listDevices
@@ -684,6 +685,17 @@ function updateMentionPopup() {
   const input = $('chat-input');
   const pop = $('mention-pop');
   const before = input.value.slice(0, input.selectionStart);
+  // Comandos do bot: texto começando com / e ainda sem espaço
+  const cm = input.value.match(/^\/(\S*)$/);
+  if (cm) {
+    const q = cm[1].toLowerCase();
+    const items = COMMANDS.filter((c) => c.cmd.slice(1).startsWith(q));
+    if (!items.length) { closeMentionPopup(); return; }
+    mentionState = { cmd: true, items, index: 0 };
+    renderMentionPopup();
+    pop.hidden = false;
+    return;
+  }
   const m = before.match(/(^|\s)@([^\s@]{0,24})$/);
   if (!m || !members.length) { closeMentionPopup(); return; }
   const query = m[2].toLowerCase();
@@ -699,6 +711,16 @@ function updateMentionPopup() {
 function renderMentionPopup() {
   const pop = $('mention-pop');
   pop.innerHTML = '';
+  if (mentionState.cmd) {
+    pop.append(h('div', { class: 'mention-head' }, 'Comandos do Sorteador'));
+    mentionState.items.forEach((c, i) => {
+      const b = h('button', { type: 'button', class: 'mention-item cmd-item' + (i === mentionState.index ? ' active' : ''), role: 'option', 'aria-selected': String(i === mentionState.index) },
+        h('span', { class: 'cmd-name' }, c.cmd), h('span', { class: 'cmd-desc' }, c.desc), h('span', { class: 'cmd-ex' }, c.example));
+      b.addEventListener('mousedown', (e) => { e.preventDefault(); pickMention(i); });
+      pop.append(b);
+    });
+    return;
+  }
   pop.append(h('div', { class: 'mention-head' }, 'Membros'));
   mentionState.items.forEach((x, i) => {
     const b = h('button', { type: 'button', class: 'mention-item' + (i === mentionState.index ? ' active' : ''), role: 'option', 'aria-selected': String(i === mentionState.index) },
@@ -710,6 +732,14 @@ function renderMentionPopup() {
 function closeMentionPopup() { mentionState = null; $('mention-pop').hidden = true; }
 function pickMention(i) {
   const input = $('chat-input');
+  if (mentionState.cmd) {
+    const c = mentionState.items[i];
+    input.value = c.cmd + ' ';
+    input.setSelectionRange(input.value.length, input.value.length);
+    closeMentionPopup();
+    input.focus();
+    return;
+  }
   const x = mentionState.items[i];
   const caret = input.selectionStart;
   const text = input.value;
@@ -751,8 +781,127 @@ function openLightbox(src) {
   openModal({ title: 'Imagem', wide: true, body: [img, h('a', { href: src, target: '_blank', rel: 'noopener noreferrer', class: 'link' }, 'Abrir original em outra aba')] });
 }
 
+// ---------- Bot Sorteador ----------
+// Quem entra por padrão: quem está na call desta sala; senão quem está online; senão todo mundo
+function defaultDrawPeople() {
+  if (!current) return [];
+  if (call.room && call.roomId === current.id) {
+    const inCall = participants().map((x) => x.identity).filter((id) => members.some((m) => m.user_id === id));
+    if (inCall.length >= 2) return inCall;
+  }
+  const online = members.filter((m) => statusOf(m.user_id) !== 'offline').map((m) => m.user_id);
+  return online.length >= 2 ? online : members.map((m) => m.user_id);
+}
+
+async function runDraw(req) {
+  if (!current) return;
+  try {
+    const id = await rpc('bot_draw', {
+      p_room: current.id,
+      p_kind: req.kind,
+      p_people: req.people || [],
+      p_items: req.items || [],
+      p_count: req.count || 1,
+      p_min: req.min ?? 1,
+      p_max: req.max ?? 6,
+      p_title: req.title || null
+    });
+    const { data } = await sb.from('messages').select(MSG_FIELDS).eq('id', id).single();
+    if (data) appendMessage(data, true);
+  } catch (err) {
+    toast(/bot_draw|function/i.test(err.message) ? 'O Sorteador ainda não foi ativado (rode o SQL da v2.4).' : err.message, 4500);
+  }
+}
+
+function openDrawModal(kind, count) {
+  if (!current) return;
+  const tabs = [['teams', 'Times'], ['people', 'Pessoas'], ['items', 'Lista'], ['order', 'Ordem'], ['quick', 'Rápidos']];
+  let active = kind || 'teams';
+  const selected = new Set(defaultDrawPeople());
+  const title = h('input', { maxlength: '60', placeholder: 'Ex.: Quem paga a pizza?' });
+  const guests = h('input', { maxlength: '400', placeholder: 'Nomes de quem não tem conta, separados por vírgula' });
+  const listArea = h('textarea', { rows: '5', maxlength: '2000', placeholder: 'Uma opção por linha (ou separadas por vírgula)' });
+  const countSel = h('select');
+  const body = h('div', { class: 'draw-modal' });
+  const tabRow = h('div', { class: 'draw-tabs', role: 'tablist' });
+  const submit = h('button', { class: 'btn primary' }, 'Sortear');
+
+  const peopleBox = () => {
+    const list = h('div', { class: 'draw-people' });
+    const paint = () => {
+      list.innerHTML = '';
+      for (const m of [...members].sort((a, b) => a.name.localeCompare(b.name))) {
+        const cb = h('input', { type: 'checkbox', checked: selected.has(m.user_id) });
+        cb.addEventListener('change', () => { if (cb.checked) selected.add(m.user_id); else selected.delete(m.user_id); });
+        list.append(h('label', { class: 'draw-person' }, cb, avatarOf(m.user_id, m.name, 'sm', true), h('span', { style: { color: nameColor(m) || '' } }, m.name)));
+      }
+    };
+    paint();
+    const quick = (label, fn) => h('button', { type: 'button', class: 'btn secondary small', onClick: () => { selected.clear(); fn().forEach((id) => selected.add(id)); paint(); } }, label);
+    return h('div', { class: 'field' },
+      h('span', { class: 'label' }, 'Quem participa'),
+      h('div', { class: 'draw-quick' },
+        call.room && call.roomId === current.id ? quick('Quem está na call', () => participants().map((x) => x.identity)) : null,
+        quick('Online', () => members.filter((m) => statusOf(m.user_id) !== 'offline').map((m) => m.user_id)),
+        quick('Todos', () => members.map((m) => m.user_id)),
+        quick('Ninguém', () => [])),
+      list,
+      field('Mais alguém de fora?', guests));
+  };
+  const setCount = (min, max, def, label) => {
+    countSel.innerHTML = '';
+    for (let i = min; i <= max; i++) countSel.append(h('option', { value: String(i) }, `${i} ${label(i)}`));
+    countSel.value = String(Math.min(max, Math.max(min, def)));
+  };
+
+  const render = () => {
+    tabRow.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.k === active));
+    body.innerHTML = '';
+    submit.hidden = active === 'quick';
+    if (active === 'quick') {
+      const q = (label, req) => h('button', { type: 'button', class: 'btn secondary', onClick: () => { closeModal(); runDraw(req); } }, label);
+      body.append(h('div', { class: 'draw-quick-grid' },
+        q('🪙 Cara ou coroa', { kind: 'coin', count: 1 }),
+        q('🎲 Dado de 6 lados', { kind: 'dice', count: 1, max: 6 }),
+        q('🎲🎲 Dois dados', { kind: 'dice', count: 2, max: 6 }),
+        q('🎲 Dado de 20 lados', { kind: 'dice', count: 1, max: 20 }),
+        q('🔢 Número de 1 a 10', { kind: 'number', min: 1, max: 10 }),
+        q('🔢 Número de 1 a 100', { kind: 'number', min: 1, max: 100 })),
+        h('p', { class: 'hint' }, 'Dica: no chat, dá para digitar /dado 3d8, /moeda 3 ou /numero 5 50.'));
+      return;
+    }
+    body.append(field('Título (opcional)', title));
+    if (active === 'teams') { setCount(2, 8, count || 2, (i) => 'times'); body.append(field('Quantos times', countSel), peopleBox()); }
+    if (active === 'people') { setCount(1, 10, count || 1, (i) => (i === 1 ? 'pessoa' : 'pessoas')); body.append(field('Quantas pessoas sortear', countSel), peopleBox()); }
+    if (active === 'order') body.append(peopleBox());
+    if (active === 'items') { setCount(1, 10, count || 1, (i) => (i === 1 ? 'opção' : 'opções')); body.append(field('Opções', listArea), field('Quantas escolher', countSel)); }
+  };
+  for (const [k, label] of tabs) {
+    const b = h('button', { type: 'button', class: 'draw-tab', 'data-k': k, role: 'tab' }, label);
+    b.addEventListener('click', () => { active = k; render(); });
+    tabRow.append(b);
+  }
+  openModal({ title: 'Sorteador', wide: true, body: [tabRow, body], actions: [h('button', { class: 'btn secondary', onClick: closeModal }, 'Cancelar'), submit] });
+  render();
+
+  submit.addEventListener('click', () => {
+    const guestList = guests.value.split(',').map((s) => s.trim()).filter(Boolean);
+    const req = { kind: active, title: title.value.trim() || null, count: parseInt(countSel.value, 10) || 1 };
+    if (active === 'items') {
+      req.items = listArea.value.split(/\n|,/).map((s) => s.trim()).filter(Boolean);
+      if (req.items.length < 2) { toast('Coloque pelo menos 2 opções.'); return; }
+    } else {
+      req.people = [...selected];
+      req.items = guestList;
+      if (req.people.length + guestList.length < 2) { toast('Escolha pelo menos 2 pessoas.'); return; }
+    }
+    closeModal();
+    runDraw(req);
+  });
+}
+
 // ---------- Chat ----------
-const MSG_FIELDS = 'id, room_id, user_id, content, created_at, attachment_path, attachment_type';
+const MSG_FIELDS = 'id, room_id, user_id, content, created_at, attachment_path, attachment_type, kind, payload';
 async function loadMessages(reset) {
   if (!current) return;
   const id = current.id;
@@ -797,8 +946,33 @@ async function ensureNames(ids) {
   for (const p of data || []) setProf(p);
 }
 
+// Mensagem do bot Sorteador
+function botMessageEl(m) {
+  const who = names.get(m.user_id) || 'Alguém';
+  const mem = members.find((x) => x.user_id === m.user_id);
+  const body = h('div', { class: 'msg-body' },
+    h('div', { class: 'msg-meta' },
+      h('span', { class: 'msg-name bot-name' }, 'Sorteador'),
+      h('span', { class: 'bot-tag' }, 'BOT'),
+      h('span', { class: 'msg-time' }, fmtTime(m.created_at))),
+    h('div', { class: 'bot-by' }, 'pedido por ', h('span', { style: { color: nameColor(mem) || colorFor(m.user_id) } }, who)),
+    resultCard(m.payload, (id) => nameColor(members.find((x) => x.user_id === id))));
+  const row = h('div', { class: 'msg-row bot', 'data-mid': String(m.id) },
+    h('span', { class: 'avatar bot-avatar', 'aria-hidden': 'true', html: BOT_ICON }), body);
+  if (m.user_id === me.id || can('delete_messages')) {
+    const del = h('button', { class: 'icon-btn msg-del', title: 'Apagar', 'aria-label': 'Apagar sorteio', html: ICON.trash });
+    del.addEventListener('click', async () => {
+      const { error } = await sb.from('messages').delete().eq('id', m.id);
+      if (error) toast('Não foi possível apagar.'); else row.remove();
+    });
+    row.append(del);
+  }
+  return row;
+}
+
 function messageEl(m, prev) {
-  const cont = prev && prev.user_id === m.user_id && new Date(m.created_at) - new Date(prev.created_at) < 5 * 60 * 1000;
+  if (m.kind === 'bot') return botMessageEl(m);
+  const cont = prev && prev.kind !== 'bot' && prev.user_id === m.user_id && new Date(m.created_at) - new Date(prev.created_at) < 5 * 60 * 1000;
   const name = names.get(m.user_id) || 'Alguém';
   const mem = members.find((x) => x.user_id === m.user_id);
   const body = h('div', { class: 'msg-body' });
@@ -878,7 +1052,10 @@ function wireChat() {
     if (mentionState) {
       if (e.key === 'ArrowDown') { e.preventDefault(); mentionState.index = (mentionState.index + 1) % mentionState.items.length; renderMentionPopup(); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); mentionState.index = (mentionState.index - 1 + mentionState.items.length) % mentionState.items.length; renderMentionPopup(); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionState.index); return; }
+      // Comando já completo (ex.: "/moeda"): Enter envia direto
+      if (e.key === 'Enter' && mentionState.cmd && COMMANDS.some((c) => c.cmd === input.value.trim().toLowerCase())) {
+        closeMentionPopup();
+      } else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionState.index); return; }
       if (e.key === 'Escape') { e.preventDefault(); closeMentionPopup(); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(); }
@@ -897,6 +1074,7 @@ function wireChat() {
   });
   $('attach-btn').addEventListener('click', () => $('attach-input').click());
   $('attach-input').addEventListener('change', () => { const f = $('attach-input').files[0]; $('attach-input').value = ''; attachFile(f); });
+  $('draw-btn').addEventListener('click', () => openDrawModal('teams'));
   $('emoji-btn').addEventListener('click', () => openEmojiPicker($('emoji-btn'), (emo) => {
     const a = input.selectionStart ?? input.value.length;
     const b = input.selectionEnd ?? a;
@@ -913,6 +1091,23 @@ function wireChat() {
     const raw = input.value.trim();
     const img = pendingImage;
     if (!raw && !img) return;
+    if (raw.startsWith('/') && !img) {
+      const req = parseCommand(raw);
+      if (req) {
+        if (req.error) { toast(req.error, 4500); return; }
+        input.value = '';
+        autosize();
+        closeMentionPopup();
+        if (['teams', 'people', 'order'].includes(req.kind)) {
+          const people = defaultDrawPeople();
+          if (people.length < 2) { openDrawModal(req.kind, req.count); return; }
+          runDraw({ ...req, people });
+        } else {
+          runDraw(req);
+        }
+        return;
+      }
+    }
     sending = true;
     const roomId = current.id;
     const row = { room_id: roomId, user_id: me.id, content: encodeMentions(raw).slice(0, 2000) };
@@ -1613,7 +1808,7 @@ async function settingsModal() {
 function roomMenu() {
   if (!current) return;
   const mine = myMember();
-  const items = [{ label: 'Convidar pessoas', onClick: inviteModal }];
+  const items = [{ label: 'Convidar pessoas', onClick: inviteModal }, { label: 'Sorteios', onClick: () => openDrawModal('teams') }];
   if (mine && mine.base_role === 'owner') items.push({ label: 'Configurações da sala', onClick: roomSettingsModal });
   if (can('manage_roles')) items.push({ label: 'Cargos', onClick: rolesModal });
   if (can('ban')) items.push({ label: 'Banidos', onClick: bansModal });

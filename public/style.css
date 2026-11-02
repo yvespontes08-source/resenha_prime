@@ -358,3 +358,45 @@ button { cursor: pointer; }
 .rarity.r-rara { background: #1f3350; color: #8cc4ff; }
 .rarity.r-lendaria { background: #3d3115; color: #f0c44c; }
 @media (max-width: 560px) { .badge-grid { grid-template-columns: 1fr; } }
+
+/* ---------- v2.4: bot Sorteador ---------- */
+.msg-row.bot { margin-top: 14px; }
+.bot-avatar { width: 40px; height: 40px; background: var(--accent); color: #fff; margin-top: 2px; }
+.bot-name { color: #c9d4ff; }
+.bot-tag { background: var(--accent); color: #fff; font-size: 10px; font-weight: 800; padding: 1px 5px; border-radius: 4px; letter-spacing: .3px; }
+.bot-by { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
+.draw-card { background: var(--bg-1); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 12px 14px; max-width: 560px; display: flex; flex-direction: column; gap: 8px; }
+.draw-title { font-weight: 700; font-size: 16px; }
+.draw-label { font-size: 12px; color: var(--text-3); }
+.draw-teams { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.draw-team { background: var(--bg-2); border-radius: 6px; border-top: 3px solid var(--accent); padding: 8px 10px; }
+.draw-team-name { font-weight: 700; font-size: 14px; display: flex; justify-content: space-between; margin-bottom: 6px; }
+.draw-team-name span { color: var(--text-3); font-weight: 500; font-size: 12px; }
+.draw-team-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.draw-chip { display: inline-block; background: var(--bg-input); border-left: 3px solid var(--text-3); border-radius: 4px; padding: 2px 8px; font-size: 14px; }
+.draw-chip.guest { border-left-style: dashed; }
+.draw-winners { display: flex; flex-wrap: wrap; gap: 8px; }
+.draw-winner { background: var(--bg-2); border: 1px solid var(--bg-input); border-radius: 8px; padding: 8px 14px; font-size: 20px; font-weight: 700; }
+.draw-order { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
+.draw-dice { display: flex; gap: 8px; flex-wrap: wrap; }
+.die { width: 46px; height: 46px; border-radius: 10px; background: #f2f3f5; color: #1e1f22; font-size: 20px; font-weight: 800; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 -3px 0 rgba(0,0,0,.15); }
+
+.draw-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--bg-input); padding-bottom: 8px; }
+.draw-tab { border: 0; background: transparent; color: var(--text-2); padding: 6px 12px; border-radius: 4px; font-weight: 600; }
+.draw-tab:hover { background: var(--bg-hover); color: var(--text); }
+.draw-tab.active { background: var(--bg-active); color: var(--text); }
+.draw-modal { display: flex; flex-direction: column; gap: 14px; }
+.draw-quick { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn.small { min-height: 30px; padding: 4px 10px; font-size: 13px; font-weight: 500; }
+.draw-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px; max-height: 220px; overflow-y: auto; background: var(--bg-0); border-radius: 6px; padding: 6px; }
+.draw-person { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 14px; --dot-ring: var(--bg-0); }
+.draw-person:hover { background: var(--bg-hover); --dot-ring: var(--bg-hover); }
+.draw-person input { width: 16px; height: 16px; accent-color: var(--accent); }
+.draw-quick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.field textarea { background: var(--bg-0); border: 0; border-radius: 4px; padding: 10px 12px; font-size: 15px; outline: none; width: 100%; resize: vertical; }
+.cmd-item { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: baseline; }
+.cmd-name { font-weight: 700; color: var(--text); }
+.cmd-desc { font-size: 13px; color: var(--text-2); }
+.cmd-ex { font-size: 12px; color: var(--text-3); font-family: ui-monospace, Consolas, monospace; }
+@media (max-width: 560px) { .cmd-ex { display: none; } .draw-quick-grid { grid-template-columns: 1fr; } }
+.field label.draw-person { text-transform: none; letter-spacing: normal; font-size: 14px; font-weight: 500; color: var(--text); margin: 0; }

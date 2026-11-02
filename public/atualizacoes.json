@@ -1,5 +1,19 @@
 [
   {
+    "versao": "2.4",
+    "data": "2026-11-02",
+    "titulo": "Bot Sorteador",
+    "itens": [
+      "Novo bot Sorteador: o sorteio é feito no servidor, então ninguém consegue roubar",
+      "/times 2 divide a galera em times equilibrados",
+      "/sortear 1 sorteia pessoas (ex.: quem paga a pizza)",
+      "/escolher pizza, açaí, hambúrguer escolhe uma das opções",
+      "/ordem embaralha a ordem de quem joga",
+      "/dado 2d6, /moeda e /numero 1 100",
+      "Digite / no chat para ver todos os comandos, ou use o botão de dado ao lado dos emojis"
+    ]
+  },
+  {
     "versao": "2.3",
     "data": "2026-11-02",
     "titulo": "Menções, notificações, imagens e insígnias",
